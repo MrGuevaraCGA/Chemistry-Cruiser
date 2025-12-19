@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chemistry Cruiser 3D: City Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; user-select: none; }
+        #game-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        
+        /* HUD & UI */
+        .hud { 
+            position: absolute; top: 20px; left: 20px; right: 20px; 
+            display: flex; justify-content: space-between; pointer-events: none; z-index: 10;
+        }
+        .hud-panel {
+            background: rgba(15, 23, 42, 0.8); 
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 15px 25px; 
+            border-radius: 12px;
+            color: #fff;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            transform: skew(-10deg);
+        }
+        .hud-text { transform: skew(10deg); font-weight: 800; font-size: 1.2rem; letter-spacing: 1px; }
+        .hud-label { color: #94a3b8; font-size: 0.8rem; text-transform: uppercase; display: block; }
+        .hud-value { color: #38bdf8; text-shadow: 0 0 10px rgba(56, 189, 248, 0.5); }
+
+        /* Start Screen */
+        #start-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(0, 0, 0, 0.98));
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 100; color: white;
+        }
+        .title-glitch {
+            font-size: 4rem; font-weight: 900; color: #fff;
+            text-shadow: 2px 2px 0px #ef4444, -2px -2px 0px #3b82f6;
+            margin-bottom: 1rem; text-align: center;
+        }
+
+        /* Quiz Modal */
+        #quiz-modal { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(0,0,0,0.8); 
+            display: none; justify-content: center; align-items: center; 
+            z-index: 50; backdrop-filter: blur(5px);
+        }
+        .modal-content { 
+            background: linear-gradient(to bottom, #1e293b, #0f172a);
+            padding: 2.5rem; border-radius: 1.5rem; max-width: 600px; width: 90%; 
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.1); 
+            text-align: center; border-top: 4px solid #3b82f6;
+            animation: slideUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        @keyframes slideUp { from { transform: translateY(50px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+        .btn { 
+            background: linear-gradient(45deg, #2563eb, #3b82f6); 
+            color: white; padding: 12px 30px; border-radius: 99px; 
+            border: none; cursor: pointer; font-size: 1.1rem; font-weight: bold;
+            box-shadow: 0 4px 15px rgba(37, 99, 235, 0.4);
+            transition: all 0.2s;
+        }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(37, 99, 235, 0.6); }
+        .btn:active { transform: translateY(1px); }
+
+        .answer-btn {
+            display: block; width: 100%; margin: 12px 0; padding: 16px;
+            background: rgba(255, 255, 255, 0.05); color: #e2e8f0; 
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px; text-align: left; transition: all 0.2s;
+            font-size: 1.05rem; position: relative; overflow: hidden;
+        }
+        .answer-btn:hover { background: rgba(59, 130, 246, 0.2); border-color: #3b82f6; padding-left: 20px; }
+        .answer-btn:disabled { opacity: 0.7; cursor: not-allowed; }
+
+        /* Mobile Controls */
+        #mobile-controls {
+            position: absolute; bottom: 20px; width: 100%; height: 160px; pointer-events: none;
+            display: none; justify-content: space-between; padding: 0 40px; z-index: 20;
+        }
+        .d-pad { pointer-events: auto; position: relative; width: 120px; height: 120px; }
+        .control-btn {
+            position: absolute; width: 50px; height: 50px;
+            background: rgba(255,255,255,0.15); backdrop-filter: blur(4px);
+            border-radius: 50%; border: 1px solid rgba(255,255,255,0.3);
+            display: flex; justify-content: center; align-items: center;
+            font-size: 24px; color: white; touch-action: manipulation;
+        }
+        .control-btn:active { background: rgba(59, 130, 246, 0.5); transform: scale(0.95); }
+        #btn-up { top: 0; left: 35px; }
+        #btn-down { bottom: 0; left: 35px; }
+        #btn-left { top: 35px; left: 0; }
+        #btn-right { top: 35px; right: 0; }
+
+        @media (max-width: 768px) { #mobile-controls { display: flex; } }
+    </style>
+</head>
+<body>
+
+<div id="game-container"></div>
+
+<!-- UI Layer -->
+<div class="hud">
+    <div class="hud-panel">
+        <div class="hud-text">
+            <span class="hud-label">Score</span>
+            <span class="hud-value" id="score-display">0</span>
+        </div>
+    </div>
+    <div class="hud-panel">
+        <div class="hud-text">
+            <span class="hud-label">Matter</span>
+            <span class="hud-value" id="items-display">0/10</span>
+        </div>
+    </div>
+</div>
+
+<!-- Start Screen -->
+<div id="start-screen">
+    <div class="title-glitch">CHEMISTRY<br>CRUISER 3D</div>
+    <p class="text-xl mb-8 text-blue-200 tracking-wider font-light">CITY EDITION</p>
+    
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10 max-w-4xl text-center px-4">
+        <div class="bg-gray-800/50 p-6 rounded-xl border border-gray-700 backdrop-blur-sm">
+            <div class="text-4xl mb-2">🏎️</div>
+            <h3 class="font-bold text-white mb-1">Drive</h3>
+            <p class="text-gray-400 text-sm">Explore the city and find blue atoms.</p>
+        </div>
+        <div class="bg-gray-800/50 p-6 rounded-xl border border-gray-700 backdrop-blur-sm">
+            <div class="text-4xl mb-2">🧪</div>
+            <h3 class="font-bold text-white mb-1">Learn</h3>
+            <p class="text-gray-400 text-sm">Answer Unit 1 questions to power up.</p>
+        </div>
+        <div class="bg-gray-800/50 p-6 rounded-xl border border-gray-700 backdrop-blur-sm">
+            <div class="text-4xl mb-2">⚠️</div>
+            <h3 class="font-bold text-white mb-1">Survive</h3>
+            <p class="text-gray-400 text-sm">Avoid the unstable red matter spikes.</p>
+        </div>
+    </div>
+
+    <button class="btn text-2xl px-12 py-5 shadow-lg shadow-blue-500/20" onclick="initGame()">ENTER CITY</button>
+</div>
+
+<!-- Quiz Modal -->
+<div id="quiz-modal">
+    <div class="modal-content">
+        <h2 class="text-2xl font-bold text-white mb-6" id="quiz-question">Question?</h2>
+        <div id="quiz-options"></div>
+        <div id="quiz-feedback" class="mt-6 font-bold hidden text-lg"></div>
+        <button id="quiz-continue" class="btn mt-6 hidden w-full" onclick="closeQuiz()">Resume Drive</button>
+    </div>
+</div>
+
+<!-- Mobile Controls -->
+<div id="mobile-controls">
+    <div class="d-pad">
+        <div class="control-btn" id="btn-up">▲</div>
+        <div class="control-btn" id="btn-down">▼</div>
+        <div class="control-btn" id="btn-left">◀</div>
+        <div class="control-btn" id="btn-right">▶</div>
+    </div>
+</div>
+
+<script>
+    // --- Data: Questions ---
+    const questions = [
+        { q: "Which statement best describes matter?", a: "Anything that has mass and takes up space", options: ["Anything that has mass and takes up space", "Only solids and liquids", "Energy and light", "Anything visible to the eye"] },
+        { q: "Protons are located in which part of an atom?", a: "Nucleus", options: ["Electron Cloud", "Nucleus", "Outer Shell", "They orbit the nucleus"] },
+        { q: "What is the charge of a neutron?", a: "Neutral (No charge)", options: ["Positive", "Negative", "Neutral (No charge)", "Variable"] },
+        { q: "In a solid, particles:", a: "Vibrate in a fixed position", options: ["Move freely and quickly", "Slide past one another", "Vibrate in a fixed position", "Are completely motionless"] },
+        { q: "Which state of matter has no fixed shape and no fixed volume?", a: "Gas", options: ["Solid", "Liquid", "Gas", "Plasma"] },
+        { q: "A physical change:", a: "Does not change the substance's identity", options: ["Creates a new substance", "Changes the chemical composition", "Is irreversible", "Does not change the substance's identity"] },
+        { q: "According to the Law of Conservation of Matter:", a: "Matter is neither created nor destroyed", options: ["Matter is destroyed in fire", "Mass increases during reactions", "Matter is neither created nor destroyed", "Matter turns into pure energy easily"] },
+        { q: "A mixture is defined as:", a: "Two or more substances physically combined", options: ["Two or more substances chemically bonded", "Two or more substances physically combined", "A pure substance", "A single element"] },
+        { q: "Filtration works because:", a: "It separates based on particle size", options: ["It separates based on magnetism", "It separates based on particle size", "It separates based on boiling point", "It creates a chemical reaction"] },
+        { q: "Magnetism can separate:", a: "Iron filings from sand", options: ["Salt from water", "Oil from water", "Iron filings from sand", "Sugar from flour"] },
+        { q: "Trail mix is an example of:", a: "Heterogeneous mixture", options: ["Homogeneous mixture", "Compound", "Element", "Heterogeneous mixture"] },
+        { q: "Saltwater is an example of:", a: "Homogeneous mixture (Solution)", options: ["Heterogeneous mixture", "Compound", "Homogeneous mixture (Solution)", "Element"] },
+        { q: "Burning a log appears to lose mass because:", a: "Gases are released into the air", options: ["The matter is destroyed", "The atoms disappear", "Gases are released into the air", "Fire eats the wood"] },
+        { q: "Which is a sign that a chemical reaction has occurred?", a: "Formation of a precipitate or gas", options: ["Change in shape", "Melting", "Formation of a precipitate or gas", "Breaking into pieces"] },
+        { q: "The smallest unit of matter that retains the properties of an element is:", a: "Atom", options: ["Molecule", "Atom", "Electron", "Proton"] }
+    ];
+
+    // --- Game Variables ---
+    let scene, camera, renderer, car, cityGroup, itemsGroup, obstaclesGroup, rainSystem;
+    let gameActive = false;
+    let score = 0;
+    let itemsCollected = 0;
+    let clock = new THREE.Clock();
+    let keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, w: false, s: false, a: false, d: false };
+    
+    // Physics / Movement
+    let speed = 0;
+    let maxSpeed = 0.8;
+    let turnSpeed = 0.04;
+    let velocity = new THREE.Vector3();
+    
+    // Environment
+    const CITY_SIZE = 1000;
+    const BUILDING_COUNT = 150;
+    let fogColor = { r: 0.1, g: 0.1, b: 0.2 }; // Start night-ish
+    let time = 0;
+
+    // --- Three.js Initialization ---
+    function initGame() {
+        document.getElementById('start-screen').style.display = 'none';
+        
+        // 1. Scene Setup
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111111);
+        scene.fog = new THREE.FogExp2(0x111111, 0.015);
+
+        // 2. Camera
+        camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        // 3. Renderer
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.getElementById('game-container').appendChild(renderer.domElement);
+
+        // 4. Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040, 2); // Soft white light
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(50, 100, 50);
+        dirLight.castShadow = true;
+        dirLight.shadow.camera.top = 50;
+        dirLight.shadow.camera.bottom = -50;
+        dirLight.shadow.camera.left = -50;
+        dirLight.shadow.camera.right = 50;
+        scene.add(dirLight);
+
+        // 5. Environment
+        createCity();
+        createRain();
+
+        // 6. Car
+        createCar();
+        
+        // 7. Collectibles & Obstacles
+        createCollectibles();
+
+        // 8. Events
+        window.addEventListener('resize', onWindowResize, false);
+        window.addEventListener('keydown', (e) => keys[e.key] = true);
+        window.addEventListener('keyup', (e) => keys[e.key] = false);
+        setupMobileControls();
+
+        // 9. Start Loop
+        gameActive = true;
+        animate();
+    }
+
+    function createCity() {
+        cityGroup = new THREE.Group();
+        
+        // Floor (Asphalt)
+        const floorGeo = new THREE.PlaneGeometry(CITY_SIZE, CITY_SIZE);
+        const floorMat = new THREE.MeshStandardMaterial({ 
+            color: 0x1a1a1a, 
+            roughness: 0.8 
+        });
+        const floor = new THREE.Mesh(floorGeo, floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        cityGroup.add(floor);
+
+        // Grid Lines (Road Markings)
+        const gridHelper = new THREE.GridHelper(CITY_SIZE, 40, 0x555555, 0x333333);
+        gridHelper.position.y = 0.05;
+        cityGroup.add(gridHelper);
+
+        // Buildings
+        const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+        const winMat = new THREE.MeshBasicMaterial({ color: 0xffff00 }); // Lit windows
+        
+        for (let i = 0; i < BUILDING_COUNT; i++) {
+            // Random Size
+            const h = Math.random() * 20 + 5;
+            const w = Math.random() * 5 + 3;
+            const d = Math.random() * 5 + 3;
+            
+            // Random Pos
+            const x = (Math.random() - 0.5) * CITY_SIZE;
+            const z = (Math.random() - 0.5) * CITY_SIZE;
+            
+            // Don't spawn on spawn point
+            if (Math.abs(x) < 20 && Math.abs(z) < 20) continue;
+
+            const buildingMat = new THREE.MeshStandardMaterial({ 
+                color: Math.random() > 0.5 ? 0x222222 : 0x333344,
+                roughness: 0.2
+            });
+
+            const building = new THREE.Mesh(boxGeo, buildingMat);
+            building.position.set(x, h/2, z);
+            building.scale.set(w, h, d);
+            building.castShadow = true;
+            building.receiveShadow = true;
+            
+            // Add "Windows" (Simple emissive stripe)
+            if (Math.random() > 0.5) {
+                const win = new THREE.Mesh(boxGeo, new THREE.MeshBasicMaterial({ color: 0x4fc3f7 }));
+                win.scale.set(w + 0.1, h * 0.1, d + 0.1);
+                win.position.set(x, h * 0.7, z);
+                cityGroup.add(win);
+            }
+
+            cityGroup.add(building);
+        }
+        scene.add(cityGroup);
+    }
+
+    function createCar() {
+        car = new THREE.Group();
+
+        // Chassis
+        const bodyGeo = new THREE.BoxGeometry(2, 0.5, 4);
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.6, roughness: 0.4 });
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.position.y = 0.5;
+        body.castShadow = true;
+        car.add(body);
+
+        // Cabin
+        const cabinGeo = new THREE.BoxGeometry(1.8, 0.6, 2);
+        const cabinMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.9, roughness: 0.1 });
+        const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+        cabin.position.y = 1.0;
+        cabin.position.z = -0.2;
+        car.add(cabin);
+
+        // Wheels
+        const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
+        const wheelMat = new THREE.MeshStandardMaterial({ color: 0x000000 });
+        
+        const positions = [
+            { x: -1.1, z: 1.2 }, { x: 1.1, z: 1.2 },
+            { x: -1.1, z: -1.2 }, { x: 1.1, z: -1.2 }
+        ];
+
+        positions.forEach(pos => {
+            const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+            wheel.rotation.z = Math.PI / 2;
+            wheel.position.set(pos.x, 0.4, pos.z);
+            car.add(wheel);
+        });
+
+        // Headlights (Spotlights)
+        const spotLightL = new THREE.SpotLight(0xffffee, 5, 40, 0.5, 0.5, 1);
+        spotLightL.position.set(-0.6, 0.8, 2);
+        spotLightL.target.position.set(-0.6, 0, 10);
+        car.add(spotLightL);
+        car.add(spotLightL.target);
+
+        const spotLightR = new THREE.SpotLight(0xffffee, 5, 40, 0.5, 0.5, 1);
+        spotLightR.position.set(0.6, 0.8, 2);
+        spotLightR.target.position.set(0.6, 0, 10);
+        car.add(spotLightR);
+        car.add(spotLightR.target);
+
+        // Emissive headlights mesh
+        const hlGeo = new THREE.BoxGeometry(0.4, 0.2, 0.1);
+        const hlMat = new THREE.MeshBasicMaterial({ color: 0xffffcc });
+        const hlL = new THREE.Mesh(hlGeo, hlMat);
+        hlL.position.set(-0.6, 0.6, 2.05);
+        car.add(hlL);
+        const hlR = new THREE.Mesh(hlGeo, hlMat);
+        hlR.position.set(0.6, 0.6, 2.05);
+        car.add(hlR);
+
+        scene.add(car);
+    }
+
+    function createCollectibles() {
+        itemsGroup = new THREE.Group();
+        obstaclesGroup = new THREE.Group();
+
+        const atomGeo = new THREE.SphereGeometry(0.6, 16, 16);
+        const atomMat = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x0088aa, emissiveIntensity: 0.5 });
+        
+        const spikeGeo = new THREE.ConeGeometry(0.6, 2, 8);
+        const spikeMat = new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0x550000 });
+
+        // Spawn items randomly
+        for(let i=0; i<30; i++) { spawnItem(atomGeo, atomMat); }
+        for(let i=0; i<20; i++) { spawnObstacle(spikeGeo, spikeMat); }
+
+        scene.add(itemsGroup);
+        scene.add(obstaclesGroup);
+    }
+
+    function spawnItem(geo, mat) {
+        const item = new THREE.Mesh(geo, mat);
+        setRandomPosition(item);
+        item.position.y = 1; 
+        
+        // Add orbiting electron ring visual
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.05, 8, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }));
+        item.add(ring);
+        
+        itemsGroup.add(item);
+    }
+
+    function spawnObstacle(geo, mat) {
+        const obs = new THREE.Mesh(geo, mat);
+        setRandomPosition(obs);
+        obs.position.y = 1;
+        obstaclesGroup.add(obs);
+    }
+
+    function setRandomPosition(mesh) {
+        const range = CITY_SIZE / 2 - 20;
+        mesh.position.x = (Math.random() - 0.5) * 2 * range;
+        mesh.position.z = (Math.random() - 0.5) * 2 * range;
+    }
+
+    function createRain() {
+        const geo = new THREE.BufferGeometry();
+        const count = 5000;
+        const positions = new Float32Array(count * 3);
+        
+        for(let i=0; i<count*3; i+=3) {
+            positions[i] = (Math.random() - 0.5) * 100;
+            positions[i+1] = Math.random() * 60;
+            positions[i+2] = (Math.random() - 0.5) * 100;
+        }
+        
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const mat = new THREE.PointsMaterial({ color: 0xaaaaaa, size: 0.1, transparent: true, opacity: 0.6 });
+        rainSystem = new THREE.Points(geo, mat);
+        scene.add(rainSystem);
+    }
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // --- Main Game Loop ---
+    function animate() {
+        requestAnimationFrame(animate);
+        
+        if (!gameActive) return;
+
+        const delta = clock.getDelta();
+        time += delta;
+
+        // 1. Controls & Physics
+        if (keys.ArrowUp || keys.w) speed = Math.min(speed + 0.02, maxSpeed);
+        else if (keys.ArrowDown || keys.s) speed = Math.max(speed - 0.02, -maxSpeed/2);
+        else speed *= 0.95; // Friction
+
+        if (Math.abs(speed) > 0.01) {
+            if (keys.ArrowLeft || keys.a) car.rotation.y += turnSpeed * Math.sign(speed);
+            if (keys.ArrowRight || keys.d) car.rotation.y -= turnSpeed * Math.sign(speed);
+        }
+
+        car.translateZ(speed);
+
+        // 2. Camera Follow
+        const relativeCameraOffset = new THREE.Vector3(0, 5, -10);
+        const cameraOffset = relativeCameraOffset.applyMatrix4(car.matrixWorld);
+        camera.position.lerp(cameraOffset, 0.1);
+        camera.lookAt(car.position);
+
+        // 3. Environment Animation (Weather/DayCycle)
+        const hue = (Math.sin(time * 0.1) + 1) * 0.1 + 0.55; // Blue to purple shift
+        scene.fog.color.setHSL(hue, 0.3, 0.1);
+        scene.background.setHSL(hue, 0.3, 0.05);
+
+        // Rain follow car
+        if(rainSystem) {
+            rainSystem.position.x = car.position.x;
+            rainSystem.position.z = car.position.z;
+            rainSystem.rotation.y -= 0.002;
+            const positions = rainSystem.geometry.attributes.position.array;
+            for(let i=1; i<positions.length; i+=3) {
+                positions[i] -= 0.5;
+                if (positions[i] < 0) positions[i] = 60;
+            }
+            rainSystem.geometry.attributes.position.needsUpdate = true;
+        }
+
+        // 4. Item Animation
+        itemsGroup.children.forEach(item => {
+            item.rotation.y += 0.02;
+            item.rotation.z += 0.01;
+            item.children[0].rotation.x += 0.05; // Spin ring
+        });
+        
+        obstaclesGroup.children.forEach(obs => {
+            obs.rotation.y -= 0.05;
+            // Pulsing scale
+            const s = 1 + Math.sin(time * 5) * 0.1;
+            obs.scale.set(s, s, s);
+        });
+
+        // 5. Collision Detection
+        checkCollisions();
+
+        renderer.render(scene, camera);
+    }
+
+    function checkCollisions() {
+        const carBox = new THREE.Box3().setFromObject(car);
+        
+        // Items
+        for (let i = itemsGroup.children.length - 1; i >= 0; i--) {
+            const item = itemsGroup.children[i];
+            const itemBox = new THREE.Box3().setFromObject(item);
+            if (carBox.intersectsBox(itemBox)) {
+                itemsGroup.remove(item);
+                triggerQuiz();
+                break;
+            }
+        }
+
+        // Obstacles
+        for (let obs of obstaclesGroup.children) {
+            const obsBox = new THREE.Box3().setFromObject(obs);
+            if (carBox.intersectsBox(obsBox)) {
+                // Knockback
+                speed = -speed * 0.8;
+                score = Math.max(0, score - 50);
+                updateScore();
+                // Visual shake
+                camera.position.x += (Math.random() - 0.5);
+                camera.position.y += (Math.random() - 0.5);
+            }
+        }
+    }
+
+    // --- Quiz Logic ---
+    function triggerQuiz() {
+        gameActive = false; // Pause
+        const qIndex = Math.floor(Math.random() * questions.length);
+        const currentQ = questions[qIndex];
+
+        const modal = document.getElementById('quiz-modal');
+        const qText = document.getElementById('quiz-question');
+        const qOptions = document.getElementById('quiz-options');
+        const qFeedback = document.getElementById('quiz-feedback');
+        const btnContinue = document.getElementById('quiz-continue');
+
+        modal.style.display = 'flex';
+        qText.innerText = currentQ.q;
+        qOptions.innerHTML = '';
+        qFeedback.classList.add('hidden');
+        btnContinue.classList.add('hidden');
+
+        // Shuffle options
+        const shuffledOptions = [...currentQ.options].sort(() => Math.random() - 0.5);
+
+        shuffledOptions.forEach(opt => {
+            const btn = document.createElement('button');
+            btn.className = 'answer-btn';
+            btn.innerText = opt;
+            btn.onclick = () => checkAnswer(btn, opt, currentQ.a);
+            qOptions.appendChild(btn);
+        });
+    }
+
+    function checkAnswer(btn, selected, correct) {
+        const qFeedback = document.getElementById('quiz-feedback');
+        const btnContinue = document.getElementById('quiz-continue');
+        const allBtns = document.querySelectorAll('.answer-btn');
+
+        allBtns.forEach(b => b.disabled = true);
+        qFeedback.classList.remove('hidden');
+        btnContinue.classList.remove('hidden');
+
+        if (selected === correct) {
+            btn.style.background = 'rgba(34, 197, 94, 0.4)';
+            btn.style.borderColor = '#22c55e';
+            qFeedback.innerText = "Correct! +100 Points";
+            qFeedback.style.color = '#4ade80';
+            score += 100;
+        } else {
+            btn.style.background = 'rgba(239, 68, 68, 0.4)';
+            btn.style.borderColor = '#ef4444';
+            qFeedback.innerText = `Incorrect. The answer was: ${correct}`;
+            qFeedback.style.color = '#f87171';
+            
+            allBtns.forEach(b => {
+                if(b.innerText === correct) {
+                    b.style.background = 'rgba(34, 197, 94, 0.4)';
+                    b.style.borderColor = '#22c55e';
+                }
+            });
+        }
+        updateScore();
+    }
+
+    function closeQuiz() {
+        document.getElementById('quiz-modal').style.display = 'none';
+        itemsCollected++;
+        updateScore();
+        
+        // Spawn replacement item somewhere else
+        const atomGeo = new THREE.SphereGeometry(0.6, 16, 16);
+        const atomMat = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x0088aa, emissiveIntensity: 0.5 });
+        spawnItem(atomGeo, atomMat);
+
+        gameActive = true; // Resume
+        clock.getDelta(); // Reset clock to prevent jumping
+        animate();
+    }
+
+    function updateScore() {
+        document.getElementById('score-display').innerText = score;
+        document.getElementById('items-display').innerText = `${itemsCollected}/10`;
+    }
+
+    // Mobile Input Setup
+    function setupMobileControls() {
+        const btnUp = document.getElementById('btn-up');
+        const btnDown = document.getElementById('btn-down');
+        const btnLeft = document.getElementById('btn-left');
+        const btnRight = document.getElementById('btn-right');
+
+        const handle = (key, state) => (e) => {
+            e.preventDefault();
+            keys[key] = state;
+        };
+
+        btnUp.addEventListener('touchstart', handle('ArrowUp', true));
+        btnUp.addEventListener('touchend', handle('ArrowUp', false));
+        btnDown.addEventListener('touchstart', handle('ArrowDown', true));
+        btnDown.addEventListener('touchend', handle('ArrowDown', false));
+        btnLeft.addEventListener('touchstart', handle('ArrowLeft', true));
+        btnLeft.addEventListener('touchend', handle('ArrowLeft', false));
+        btnRight.addEventListener('touchstart', handle('ArrowRight', true));
+        btnRight.addEventListener('touchend', handle('ArrowRight', false));
+    }
+</script>
+</body>
+</html>
