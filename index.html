@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chemistry Cruiser 3D: City Edition</title>
+    <title>Chemistry Cruiser 3D: Rolling Hills Edition</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
@@ -148,7 +148,7 @@
         <div class="bg-gray-800/50 p-6 rounded-xl border border-gray-700 backdrop-blur-sm">
             <div class="text-4xl mb-2">🏎️</div>
             <h3 class="font-bold text-white mb-1">Drive</h3>
-            <p class="text-gray-400 text-sm">Explore the city and find blue atoms.</p>
+            <p class="text-gray-400 text-sm">Explore the hills and find blue atoms.</p>
         </div>
         <div class="bg-gray-800/50 p-6 rounded-xl border border-gray-700 backdrop-blur-sm">
             <div class="text-4xl mb-2">🧪</div>
@@ -158,7 +158,7 @@
         <div class="bg-gray-800/50 p-6 rounded-xl border border-gray-700 backdrop-blur-sm">
             <div class="text-4xl mb-2">⚠️</div>
             <h3 class="font-bold text-white mb-1">Survive</h3>
-            <p class="text-gray-400 text-sm">Avoid the unstable red matter spikes.</p>
+            <p class="text-gray-400 text-sm">Avoid the spikes and don't hit buildings!</p>
         </div>
     </div>
 
@@ -206,7 +206,7 @@
     ];
 
     // --- Game Variables ---
-    let scene, camera, renderer, car, cityGroup, itemsGroup, obstaclesGroup, rainSystem;
+    let scene, camera, renderer, car, cityGroup, itemsGroup, obstaclesGroup, buildingsGroup, rainSystem;
     let gameActive = false;
     let score = 0;
     let itemsCollected = 0;
@@ -224,6 +224,14 @@
     const BUILDING_COUNT = 150;
     const ITEMS_FOR_LEVEL_UP = 3;
     let time = 0;
+
+    // --- Terrain Helper ---
+    // Generates rolling hills
+    function getTerrainHeight(x, z) {
+        // Combination of sine waves to create rolling hills
+        return (Math.sin(x * 0.015) * 8 + Math.cos(z * 0.015) * 8) + 
+               (Math.sin(x * 0.05) * 2 + Math.cos(z * 0.05) * 2);
+    }
 
     // --- Three.js Initialization ---
     function initGame() {
@@ -250,20 +258,22 @@
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         
         const container = document.getElementById('game-container');
-        container.innerHTML = ''; // Clear prev if any
+        container.innerHTML = ''; 
         container.appendChild(renderer.domElement);
 
         // 4. Lighting
-        const ambientLight = new THREE.AmbientLight(0x404040, 2); // Soft white light
+        const ambientLight = new THREE.AmbientLight(0x404040, 2); 
         scene.add(ambientLight);
 
         const dirLight = new THREE.DirectionalLight(0xffffff, 1);
         dirLight.position.set(50, 100, 50);
         dirLight.castShadow = true;
-        dirLight.shadow.camera.top = 50;
-        dirLight.shadow.camera.bottom = -50;
-        dirLight.shadow.camera.left = -50;
-        dirLight.shadow.camera.right = 50;
+        dirLight.shadow.camera.top = 100;
+        dirLight.shadow.camera.bottom = -100;
+        dirLight.shadow.camera.left = -100;
+        dirLight.shadow.camera.right = 100;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
         scene.add(dirLight);
 
         // 5. Environment
@@ -289,38 +299,56 @@
 
     function createCity() {
         cityGroup = new THREE.Group();
+        buildingsGroup = new THREE.Group();
         
-        // Floor (Asphalt)
-        const floorGeo = new THREE.PlaneGeometry(CITY_SIZE, CITY_SIZE);
+        // Terrain Floor with Height Map
+        // Increase segments for smooth terrain (128x128)
+        const floorGeo = new THREE.PlaneGeometry(CITY_SIZE, CITY_SIZE, 128, 128);
+        
+        // Apply height map to vertices
+        const posAttribute = floorGeo.attributes.position;
+        for (let i = 0; i < posAttribute.count; i++) {
+            const x = posAttribute.getX(i);
+            const y = posAttribute.getY(i); // Plane is created X,Y, then rotated. So Y is local 'up'.
+            // Note: After rotation x=-Math.PI/2, local Y becomes world -Z (or Z depending on orientation). 
+            // We use simple mapping here.
+            
+            // Calculate height. In the plane geometry before rotation, 'y' coord acts as the 'z' in world space logic usually
+            // but after rotation (see below), the plane lies on XZ. 
+            // So we treat local y as world z for the noise function.
+            const z = getTerrainHeight(x, -y); 
+            posAttribute.setZ(i, z); // Set local Z (which becomes world Y height)
+        }
+        
+        floorGeo.computeVertexNormals();
+
         const floorMat = new THREE.MeshStandardMaterial({ 
             color: 0x1a1a1a, 
-            roughness: 0.8 
+            roughness: 0.9,
+            flatShading: true
         });
         const floor = new THREE.Mesh(floorGeo, floorMat);
         floor.rotation.x = -Math.PI / 2;
         floor.receiveShadow = true;
         cityGroup.add(floor);
 
-        // Grid Lines (Road Markings)
-        const gridHelper = new THREE.GridHelper(CITY_SIZE, 40, 0x555555, 0x333333);
-        gridHelper.position.y = 0.05;
-        cityGroup.add(gridHelper);
-
         // Buildings
         const boxGeo = new THREE.BoxGeometry(1, 1, 1);
         
         for (let i = 0; i < BUILDING_COUNT; i++) {
             // Random Size
-            const h = Math.random() * 20 + 5;
-            const w = Math.random() * 5 + 3;
-            const d = Math.random() * 5 + 3;
+            const h = Math.random() * 20 + 10;
+            const w = Math.random() * 8 + 4;
+            const d = Math.random() * 8 + 4;
             
             // Random Pos
             const x = (Math.random() - 0.5) * CITY_SIZE;
             const z = (Math.random() - 0.5) * CITY_SIZE;
             
-            // Don't spawn on spawn point
-            if (Math.abs(x) < 20 && Math.abs(z) < 20) continue;
+            // Don't spawn near start
+            if (Math.abs(x) < 40 && Math.abs(z) < 40) continue;
+
+            const groundHeight = getTerrainHeight(x, z);
 
             const buildingMat = new THREE.MeshStandardMaterial({ 
                 color: Math.random() > 0.5 ? 0x222222 : 0x333344,
@@ -328,21 +356,23 @@
             });
 
             const building = new THREE.Mesh(boxGeo, buildingMat);
-            building.position.set(x, h/2, z);
+            // Position y: ground + half height so it sits on top
+            building.position.set(x, groundHeight + h/2 - 2, z); // Sink it slightly (-2) to cover slope gaps
             building.scale.set(w, h, d);
             building.castShadow = true;
             building.receiveShadow = true;
             
             // Add "Windows" (Simple emissive stripe)
-            if (Math.random() > 0.5) {
+            if (Math.random() > 0.3) {
                 const win = new THREE.Mesh(boxGeo, new THREE.MeshBasicMaterial({ color: 0x4fc3f7 }));
-                win.scale.set(w + 0.1, h * 0.1, d + 0.1);
-                win.position.set(x, h * 0.7, z);
-                cityGroup.add(win);
+                win.scale.set(w + 0.2, h * 0.1, d + 0.2);
+                win.position.set(x, groundHeight + h * 0.7, z);
+                buildingsGroup.add(win); // Visual only
             }
 
-            cityGroup.add(building);
+            buildingsGroup.add(building);
         }
+        cityGroup.add(buildingsGroup);
         scene.add(cityGroup);
     }
 
@@ -431,7 +461,6 @@
     function spawnItem(geo, mat) {
         const item = new THREE.Mesh(geo, mat);
         setRandomPosition(item);
-        item.position.y = 1; 
         
         // Add orbiting electron ring visual
         const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.05, 8, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }));
@@ -443,7 +472,6 @@
     function spawnObstacle(geo, mat) {
         const obs = new THREE.Mesh(geo, mat);
         setRandomPosition(obs);
-        obs.position.y = 1;
         // Assign random patrol logic offset
         obs.userData = { 
             offset: Math.random() * 100,
@@ -454,8 +482,15 @@
 
     function setRandomPosition(mesh) {
         const range = CITY_SIZE / 2 - 20;
-        mesh.position.x = (Math.random() - 0.5) * 2 * range;
-        mesh.position.z = (Math.random() - 0.5) * 2 * range;
+        let x = (Math.random() - 0.5) * 2 * range;
+        let z = (Math.random() - 0.5) * 2 * range;
+        
+        // Ensure we don't spawn inside a building (naive check)
+        // Since buildings are random, we just rely on the open space being large enough
+        // but we DO need to set Height correctly
+        const y = getTerrainHeight(x, z);
+        
+        mesh.position.set(x, y + 1.5, z);
     }
 
     function createRain() {
@@ -490,7 +525,7 @@
         const delta = clock.getDelta();
         time += delta;
 
-        // 1. Controls & Physics
+        // 1. Controls & Physics (Input)
         if (keys.ArrowUp || keys.w) speed = Math.min(speed + 0.02, maxSpeed);
         else if (keys.ArrowDown || keys.s) speed = Math.max(speed - 0.02, -maxSpeed/2);
         else speed *= 0.95; // Friction
@@ -500,13 +535,77 @@
             if (keys.ArrowRight || keys.d) car.rotation.y -= turnSpeed * Math.sign(speed);
         }
 
-        car.translateZ(speed);
+        // Calculate potential new position
+        const velocity = new THREE.Vector3(0, 0, speed);
+        velocity.applyAxisAngle(new THREE.Vector3(0, 1, 0), car.rotation.y);
+        
+        const nextX = car.position.x + velocity.x;
+        const nextZ = car.position.z + velocity.z;
+
+        // --- Building Collision Logic (Solid Buildings) ---
+        // We create a bounding sphere for the car at the NEXT position
+        const carRadius = 1.5; 
+        let collision = false;
+
+        // Naive but effective check against all buildings
+        // Optimized: only check if close enough
+        for (let b of buildingsGroup.children) {
+            // Simple distance check first (optimization)
+            const dx = nextX - b.position.x;
+            const dz = nextZ - b.position.z;
+            // Get approximate building radius from scale
+            const bRadius = Math.max(b.scale.x, b.scale.z) / 2;
+            
+            if (Math.abs(dx) < bRadius + carRadius && Math.abs(dz) < bRadius + carRadius) {
+                 // Solid hit
+                 collision = true;
+                 break;
+            }
+        }
+
+        if (collision) {
+            // Bounce
+            speed = -speed * 0.5;
+        } else {
+            // Apply movement
+            car.position.x = nextX;
+            car.position.z = nextZ;
+        }
+
+        // --- Terrain Physics (Height & Tilt) ---
+        const carX = car.position.x;
+        const carZ = car.position.z;
+        const groundHeight = getTerrainHeight(carX, carZ);
+        
+        // 1. Set Y position
+        car.position.y = groundHeight + 0.5;
+
+        // 2. Calculate Terrain Normal for Tilt
+        // Sample points slightly offset
+        const step = 1.0;
+        const h_forward = getTerrainHeight(carX + Math.sin(car.rotation.y)*step, carZ + Math.cos(car.rotation.y)*step);
+        const h_right = getTerrainHeight(carX + Math.sin(car.rotation.y - Math.PI/2)*step, carZ + Math.cos(car.rotation.y - Math.PI/2)*step);
+        
+        // Pitch (Forward/Back tilt)
+        const pitch = Math.atan2(h_forward - groundHeight, step);
+        car.rotation.x = pitch;
+        
+        // Roll (Side-to-side tilt)
+        const roll = Math.atan2(h_right - groundHeight, step);
+        car.rotation.z = -roll; // Invert roll for correct visual
 
         // 2. Camera Follow
         const relativeCameraOffset = new THREE.Vector3(0, 5, -10);
         const cameraOffset = relativeCameraOffset.applyMatrix4(car.matrixWorld);
-        camera.position.lerp(cameraOffset, 0.1);
-        camera.lookAt(car.position);
+        // Smooth camera y separately to avoid jitter on rough terrain
+        camera.position.x += (cameraOffset.x - camera.position.x) * 0.1;
+        camera.position.z += (cameraOffset.z - camera.position.z) * 0.1;
+        camera.position.y += (cameraOffset.y - camera.position.y) * 0.1;
+        
+        // Look slightly above car
+        const lookTarget = car.position.clone();
+        lookTarget.y += 1;
+        camera.lookAt(lookTarget);
 
         // 3. Environment Animation (Weather/DayCycle)
         // Shift colors slightly faster based on level
@@ -518,6 +617,7 @@
         if(rainSystem) {
             rainSystem.position.x = car.position.x;
             rainSystem.position.z = car.position.z;
+            rainSystem.position.y = car.position.y + 20; // Keep rain above
             rainSystem.rotation.y -= 0.002;
             const positions = rainSystem.geometry.attributes.position.array;
             for(let i=1; i<positions.length; i+=3) {
@@ -546,13 +646,20 @@
                 const moveSpeed = obs.userData.speed * (level * 0.5); // Faster per level
                 const offset = obs.userData.offset;
                 
-                // Simple circular patrol pattern
-                obs.position.x += Math.sin(time * moveSpeed + offset) * 0.1;
-                obs.position.z += Math.cos(time * moveSpeed + offset) * 0.1;
+                // Patrol movement
+                const dx = Math.sin(time * moveSpeed + offset) * 0.1;
+                const dz = Math.cos(time * moveSpeed + offset) * 0.1;
+                
+                obs.position.x += dx;
+                obs.position.z += dz;
+                
+                // Update Height for moving obstacles!
+                const obsY = getTerrainHeight(obs.position.x, obs.position.z);
+                obs.position.y = obsY + 1.5;
             }
         });
 
-        // 6. Collision Detection
+        // 6. Collision Detection (Items/Obstacles)
         checkCollisions();
 
         renderer.render(scene, camera);
@@ -572,7 +679,7 @@
             }
         }
 
-        // Obstacles
+        // Obstacles (Spikes)
         for (let obs of obstaclesGroup.children) {
             const obsBox = new THREE.Box3().setFromObject(obs);
             if (carBox.intersectsBox(obsBox)) {
