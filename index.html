@@ -66,6 +66,13 @@
             background: rgba(59, 130, 246, 0.2); border-color: #3b82f6; transform: translateY(-5px);
         }
         
+        .color-btn {
+            width: 40px; height: 40px; rounded-full; cursor: pointer; border: 2px solid #666; border-radius: 50%;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+        .color-btn:hover { transform: scale(1.1); }
+        .color-btn.selected { border-color: white; transform: scale(1.1); box-shadow: 0 0 10px white; }
+
         /* Safety Alert */
         #safety-alert {
             position: absolute; top: 20%; width: 100%; text-align: center;
@@ -173,12 +180,14 @@
         </div>
 
         <h2 class="text-xl font-bold mb-4 text-white">2. Paint Job</h2>
-        <div class="flex justify-center gap-4 mb-8">
-            <div class="w-10 h-10 rounded-full cursor-pointer border-2 border-white bg-red-500" onclick="vehicleColor=0xff0000"></div>
-            <div class="w-10 h-10 rounded-full cursor-pointer border-2 border-gray-600 bg-blue-500" onclick="vehicleColor=0x3b82f6"></div>
-            <div class="w-10 h-10 rounded-full cursor-pointer border-2 border-gray-600 bg-green-500" onclick="vehicleColor=0x22c55e"></div>
-            <div class="w-10 h-10 rounded-full cursor-pointer border-2 border-gray-600 bg-purple-500" onclick="vehicleColor=0xa855f7"></div>
-            <div class="w-10 h-10 rounded-full cursor-pointer border-2 border-gray-600 bg-yellow-500" onclick="vehicleColor=0xeab308"></div>
+        <div class="flex justify-center gap-4 mb-8" id="color-selector">
+            <div class="color-btn bg-red-500 selected" onclick="setPaint(0xff0000, this)"></div>
+            <div class="color-btn bg-blue-500" onclick="setPaint(0x3b82f6, this)"></div>
+            <div class="color-btn bg-green-500" onclick="setPaint(0x22c55e, this)"></div>
+            <div class="color-btn bg-purple-500" onclick="setPaint(0xa855f7, this)"></div>
+            <div class="color-btn bg-yellow-500" onclick="setPaint(0xeab308, this)"></div>
+            <div class="color-btn bg-white" onclick="setPaint(0xffffff, this)"></div>
+            <div class="color-btn bg-gray-900" onclick="setPaint(0x111111, this)"></div>
         </div>
 
         <button class="btn w-full text-xl py-4 shadow-lg shadow-blue-500/30" onclick="initGame()">START ENGINE</button>
@@ -227,7 +236,7 @@
 
     // --- Game Variables ---
     let scene, camera, renderer, car, cityGroup;
-    let itemsGroup, obstaclesGroup, buildingsGroup, tunnelsGroup;
+    let itemsGroup, obstaclesGroup, buildingsGroup, tunnelsGroup, treesGroup;
     let particleSystems = []; // Rain, Snow, Smoke
     let smokeEmitter, fireEmitter;
     
@@ -259,9 +268,12 @@
     const dayDuration = 180; // Seconds for full cycle (120s day + 60s night)
     
     // Weather
-    const WEATHER_TYPES = ['Clear', 'Windy', 'Rain', 'Storm', 'Snow'];
-    let currentWeather = 0;
+    const WEATHER_TYPES = ['Clear', 'Breezy', 'Rain', 'Storm', 'Snow'];
+    let currentWeatherIndex = 0;
+    let nextWeatherIndex = 0;
+    let weatherBlend = 0;
     let weatherTimer = 0;
+    const WEATHER_CHANGE_INTERVAL = 30; // Seconds
 
     // --- Setup Selection ---
     function selectVehicle(type, el) {
@@ -270,9 +282,20 @@
         el.classList.add('selected');
     }
 
+    function setPaint(color, el) {
+        vehicleColor = color;
+        document.querySelectorAll('.color-btn').forEach(c => c.classList.remove('selected'));
+        el.classList.add('selected');
+    }
+    
+    // Explicitly expose to window to ensure onclick works
+    window.selectVehicle = selectVehicle;
+    window.setPaint = setPaint;
+    window.initGame = initGame;
+
     // --- Terrain Helper ---
     function getTerrainHeight(x, z) {
-        // Larger hills for jumping
+        // Larger hills for jumping, plus some smaller noise
         return (Math.sin(x * 0.01) * 12 + Math.cos(z * 0.01) * 12) + 
                (Math.sin(x * 0.03) * 4 + Math.cos(z * 0.03) * 4);
     }
@@ -288,7 +311,7 @@
         
         // Scene
         scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87CEEB); // Sky blue start
+        scene.background = new THREE.Color(0x87CEEB); 
         scene.fog = new THREE.FogExp2(0x87CEEB, 0.01);
 
         // Camera
@@ -343,65 +366,106 @@
         tunnelsGroup = new THREE.Group();
         itemsGroup = new THREE.Group();
         obstaclesGroup = new THREE.Group();
+        treesGroup = new THREE.Group();
         
         // Terrain
         const floorGeo = new THREE.PlaneGeometry(CITY_SIZE, CITY_SIZE, 100, 100);
         const posAttribute = floorGeo.attributes.position;
+        const colors = [];
+        const darkGray = new THREE.Color(0x222222);
+        const parkGreen = new THREE.Color(0x2d5a27);
+
         for (let i = 0; i < posAttribute.count; i++) {
             const x = posAttribute.getX(i);
-            const y = posAttribute.getY(i); 
+            const y = posAttribute.getY(i); // Local Y is Z in world map logic for height
             const z = getTerrainHeight(x, -y); 
             posAttribute.setZ(i, z);
+            
+            // Vertex Colors for Parks vs Roads
+            // Simple noise-based parks
+            const noise = Math.sin(x*0.02) * Math.cos(y*0.02);
+            if(noise > 0.5) {
+                colors.push(parkGreen.r, parkGreen.g, parkGreen.b);
+            } else {
+                colors.push(darkGray.r, darkGray.g, darkGray.b);
+            }
         }
+        floorGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
         floorGeo.computeVertexNormals();
-        const floorMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.9 });
+        
+        const floorMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
         const floor = new THREE.Mesh(floorGeo, floorMat);
         floor.rotation.x = -Math.PI / 2;
         floor.receiveShadow = true;
         cityGroup.add(floor);
 
-        // Buildings (Massive Scale)
-        const boxGeo = new THREE.BoxGeometry(1, 1, 1);
-        for (let i = 0; i < 200; i++) {
-            const h = Math.random() * 60 + 20; // Taller buildings
-            const w = Math.random() * 15 + 10; // Wider
-            const d = Math.random() * 15 + 10;
+        // Buildings (Varied Character)
+        const baseGeo = new THREE.BoxGeometry(1,1,1);
+        
+        for (let i = 0; i < 150; i++) {
             const x = (Math.random() - 0.5) * CITY_SIZE * 0.8;
             const z = (Math.random() - 0.5) * CITY_SIZE * 0.8;
+            if (Math.abs(x) < 50 && Math.abs(z) < 50) continue; 
             
-            if (Math.abs(x) < 50 && Math.abs(z) < 50) continue; // Clear spawn
+            // Check if on "Park" land (simple check matches color logic)
+            const noise = Math.sin(x*0.02) * Math.cos((-z)*0.02); // z is inverted in heightmap lookup
+            if(noise > 0.5) {
+                // Spawn Tree instead
+                createTree(x, z);
+                continue;
+            }
 
             const groundHeight = getTerrainHeight(x, z);
-            const mat = new THREE.MeshStandardMaterial({ 
-                color: Math.random() > 0.5 ? 0x1a1a2e : 0x16213e,
-                roughness: 0.3
-            });
-            const building = new THREE.Mesh(boxGeo, mat);
-            building.position.set(x, groundHeight + h/2 - 5, z);
-            building.scale.set(w, h, d);
-            building.castShadow = true;
-            building.receiveShadow = true;
             
-            // Lit Windows (emissive texture simulated)
-            if (Math.random() > 0.2) {
-                const win = new THREE.Mesh(boxGeo, new THREE.MeshBasicMaterial({ color: 0xffffcc }));
-                win.scale.set(w+0.2, h*0.8, d+0.2);
-                win.position.set(x, groundHeight + h*0.5, z);
-                win.material.transparent = true;
-                win.material.opacity = 0; // Off by default, turned on at night
-                win.userData = { isWindow: true };
-                buildingsGroup.add(win);
+            // Building Generation: Stacked
+            const segments = Math.floor(Math.random() * 3) + 1;
+            let currentH = 0;
+            let currentW = Math.random() * 10 + 10;
+            let currentD = Math.random() * 10 + 10;
+            
+            // Building Group
+            const bGroup = new THREE.Group();
+            bGroup.position.set(x, groundHeight, z);
+            
+            for(let s=0; s<segments; s++) {
+                const h = Math.random() * 20 + 10;
+                const mat = new THREE.MeshStandardMaterial({ 
+                    color: Math.random() > 0.5 ? 0x2c3e50 : 0x34495e,
+                    roughness: 0.2 
+                });
+                const mesh = new THREE.Mesh(baseGeo, mat);
+                mesh.position.y = currentH + h/2;
+                mesh.scale.set(currentW, h, currentD);
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                
+                // Add Windows
+                if(Math.random() > 0.3) {
+                    const winMat = new THREE.MeshBasicMaterial({ color: 0xffd700, transparent: true, opacity: 0 });
+                    const win = new THREE.Mesh(baseGeo, winMat);
+                    win.position.y = currentH + h/2;
+                    win.scale.set(currentW+0.2, h*0.8, currentD+0.2);
+                    win.userData = { isWindow: true };
+                    bGroup.add(win);
+                }
+
+                bGroup.add(mesh);
+                
+                currentH += h;
+                currentW *= 0.7; // Taper
+                currentD *= 0.7;
             }
-            buildingsGroup.add(building);
+            
+            buildingsGroup.add(bGroup);
         }
 
-        // Tunnels (Simple arches)
+        // Tunnels
         const tunnelGeo = new THREE.TorusGeometry(10, 2, 16, 30, Math.PI);
         const tunnelMat = new THREE.MeshStandardMaterial({ color: 0x333333, side: THREE.DoubleSide });
-        for(let i=0; i<5; i++) {
+        for(let i=0; i<6; i++) {
             const t = new THREE.Mesh(tunnelGeo, tunnelMat);
-            const x = (Math.random() - 0.5) * CITY_SIZE * 0.6;
-            const z = (Math.random() - 0.5) * CITY_SIZE * 0.6;
+            const x = (Math.random() - 0.5) * CITY_SIZE * 0.7;
+            const z = (Math.random() - 0.5) * CITY_SIZE * 0.7;
             const y = getTerrainHeight(x, z);
             t.position.set(x, y, z);
             t.scale.set(1.5, 1.5, 2);
@@ -409,14 +473,30 @@
             tunnelsGroup.add(t);
         }
 
-        // Items & Obstacles
         spawnObjects();
 
         cityGroup.add(buildingsGroup);
         cityGroup.add(tunnelsGroup);
         cityGroup.add(itemsGroup);
         cityGroup.add(obstaclesGroup);
+        cityGroup.add(treesGroup);
         scene.add(cityGroup);
+    }
+
+    function createTree(x, z) {
+        const h = getTerrainHeight(x, z);
+        const trunkGeo = new THREE.CylinderGeometry(0.5, 0.7, 3);
+        const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5d4037 });
+        const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+        trunk.position.set(x, h + 1.5, z);
+        
+        const leavesGeo = new THREE.ConeGeometry(3, 8, 8);
+        const leavesMat = new THREE.MeshStandardMaterial({ color: 0x2e7d32 });
+        const leaves = new THREE.Mesh(leavesGeo, leavesMat);
+        leaves.position.set(0, 5, 0);
+        trunk.add(leaves);
+        
+        treesGroup.add(trunk);
     }
 
     function spawnObjects() {
@@ -430,7 +510,7 @@
             itemsGroup.add(item);
         }
 
-        // Spikes (Unstable Matter)
+        // Spikes
         const spikeGeo = new THREE.ConeGeometry(1, 3, 8);
         const spikeMat = new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0x550000 });
         for(let i=0; i<30; i++) {
@@ -451,45 +531,105 @@
         car = new THREE.Group();
         car.userData = { velocity: new THREE.Vector3() };
 
-        let body, wheels = [];
+        // Materials
+        const colMat = new THREE.MeshStandardMaterial({ color: vehicleColor, metalness: 0.6, roughness: 0.2 });
+        const darkMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.4, roughness: 0.5 });
+        const glassMat = new THREE.MeshStandardMaterial({ color: 0x88ccff, transparent: true, opacity: 0.6, metalness: 0.9, roughness: 0.0 });
+        const redLight = new THREE.MeshBasicMaterial({ color: 0xff0000 });
 
-        // Build specific car type
-        const colMat = new THREE.MeshStandardMaterial({ color: vehicleColor, metalness: 0.7, roughness: 0.2 });
-        const blackMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+        if (selectedVehicleType === 'heli') {
+            // IMPROVED HELICOPTER MODEL
+            maxSpeed = 0.8;
+            isHovering = true;
+            
+            // Fuselage (Egg shape)
+            const bodyGeo = new THREE.SphereGeometry(2, 32, 32);
+            bodyGeo.scale(1, 1, 1.8);
+            const body = new THREE.Mesh(bodyGeo, colMat);
+            body.position.y = 2.5;
+            car.add(body);
+            
+            // Cockpit
+            const cockpitGeo = new THREE.SphereGeometry(1.9, 32, 32);
+            cockpitGeo.scale(0.9, 0.9, 1);
+            const cockpit = new THREE.Mesh(cockpitGeo, glassMat);
+            cockpit.position.set(0, 2.6, 1);
+            car.add(cockpit);
 
-        if (selectedVehicleType === 'f1') {
-            maxSpeed = 1.0; // Fast
+            // Tail Boom
+            const tailGeo = new THREE.CylinderGeometry(0.3, 0.6, 5);
+            const tail = new THREE.Mesh(tailGeo, colMat);
+            tail.rotation.x = Math.PI / 2;
+            tail.position.set(0, 2.5, -3.5);
+            car.add(tail);
+
+            // Tail Fin
+            const fin = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.5, 1), colMat);
+            fin.position.set(0, 3, -5.5);
+            car.add(fin);
+
+            // Tail Rotor
+            const trGeo = new THREE.BoxGeometry(0.1, 1.8, 0.2);
+            const tr = new THREE.Mesh(trGeo, darkMat);
+            tr.position.set(0.3, 3, -5.5);
+            tr.name = "tailRotor";
+            car.add(tr);
+
+            // Main Rotor Mast
+            const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.8), darkMat);
+            mast.position.set(0, 4.2, 0);
+            car.add(mast);
+
+            // Main Blades
+            const blade1 = new THREE.Mesh(new THREE.BoxGeometry(8, 0.1, 0.6), darkMat);
+            blade1.position.set(0, 4.6, 0);
+            blade1.name = "rotor1";
+            car.add(blade1);
+            
+            const blade2 = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.1, 8), darkMat);
+            blade2.position.set(0, 4.6, 0);
+            blade2.name = "rotor2";
+            car.add(blade2);
+
+            // Skids
+            const skidGeo = new THREE.CylinderGeometry(0.1, 0.1, 4);
+            const skidMat = new THREE.MeshStandardMaterial({color: 0x555555});
+            const skidL = new THREE.Mesh(skidGeo, skidMat);
+            skidL.rotation.x = Math.PI/2;
+            skidL.position.set(-1.2, 0.5, 0);
+            car.add(skidL);
+            const skidR = new THREE.Mesh(skidGeo, skidMat);
+            skidR.rotation.x = Math.PI/2;
+            skidR.position.set(1.2, 0.5, 0);
+            car.add(skidR);
+            
+            // Struts
+            const strutGeo = new THREE.CylinderGeometry(0.1, 0.1, 2);
+            const s1 = new THREE.Mesh(strutGeo, skidMat); s1.position.set(-1.2, 1.5, 1); car.add(s1);
+            const s2 = new THREE.Mesh(strutGeo, skidMat); s2.position.set(1.2, 1.5, 1); car.add(s2);
+            const s3 = new THREE.Mesh(strutGeo, skidMat); s3.position.set(-1.2, 1.5, -1); car.add(s3);
+            const s4 = new THREE.Mesh(strutGeo, skidMat); s4.position.set(1.2, 1.5, -1); car.add(s4);
+
+        } else if (selectedVehicleType === 'f1') {
+            maxSpeed = 1.0; 
             const b = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.5, 5), colMat);
             b.position.y = 0.5;
             car.add(b);
-            // Spoiler
-            const s = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.1, 0.8), blackMat);
+            const s = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.1, 0.8), darkMat);
             s.position.set(0, 1, -2);
             car.add(s);
         } else if (selectedVehicleType === 'truck') {
-            maxSpeed = 0.5; // Slow
+            maxSpeed = 0.5; 
             const b = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.5, 6), colMat);
             b.position.y = 1.5;
             car.add(b);
             const cab = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2, 2.5), colMat);
             cab.position.set(0, 2, 2);
             car.add(cab);
-        } else if (selectedVehicleType === 'heli') {
-            maxSpeed = 0.7;
-            isHovering = true;
-            const b = new THREE.Mesh(new THREE.SphereGeometry(1.5), colMat);
-            b.position.y = 2;
-            car.add(b);
-            // Rotors
-            const r = new THREE.Mesh(new THREE.BoxGeometry(8, 0.1, 0.5), blackMat);
-            r.position.y = 3.6;
-            r.name = "rotor";
-            car.add(r);
         } else if (selectedVehicleType === 'van') {
             const b = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2, 4.5), colMat);
             b.position.y = 1.2;
             car.add(b);
-            // Flower power decal simulation (simple spheres)
             const d = new THREE.Mesh(new THREE.SphereGeometry(0.5), new THREE.MeshBasicMaterial({color:0xff00ff}));
             d.position.set(1.1, 1.5, 0);
             car.add(d);
@@ -498,7 +638,7 @@
             const b = new THREE.Mesh(new THREE.BoxGeometry(2, 0.8, 4), colMat);
             b.position.y = 0.8;
             car.add(b);
-            const top = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 2), blackMat);
+            const top = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 2), darkMat);
             top.position.set(0, 1.6, -0.5);
             car.add(top);
         }
@@ -506,17 +646,17 @@
         if (!isHovering) {
             const wGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.4, 16);
             [ {x:-1.2,z:1.5}, {x:1.2,z:1.5}, {x:-1.2,z:-1.5}, {x:1.2,z:-1.5} ].forEach(pos => {
-                const w = new THREE.Mesh(wGeo, blackMat);
+                const w = new THREE.Mesh(wGeo, darkMat);
                 w.rotation.z = Math.PI/2;
                 w.position.set(pos.x, 0.5, pos.z);
                 car.add(w);
             });
         }
 
-        // Lights
-        const sl = new THREE.SpotLight(0xffffee, 10, 60, 0.6, 0.5, 1);
+        // Headlights
+        const sl = new THREE.SpotLight(0xffffee, 10, 80, 0.6, 0.5, 1);
         sl.position.set(0, 2, 1);
-        sl.target.position.set(0, 0, 20);
+        sl.target.position.set(0, 0, 25);
         car.add(sl);
         car.add(sl.target);
         
@@ -539,7 +679,6 @@
     }
 
     function createParticles() {
-        // Rain/Snow System
         const count = 10000;
         const geo = new THREE.BufferGeometry();
         const pos = new Float32Array(count * 3);
@@ -562,165 +701,209 @@
 
         const delta = clock.getDelta();
         time += delta;
-        weatherTimer += delta;
 
-        // Day/Night Cycle
         updateDayNightCycle();
-        
-        // Weather
         updateWeather(delta);
-
-        // Vehicle Physics
         updateCarPhysics(delta);
-
-        // Environment
         updateEnvironment(delta);
 
         renderer.render(scene, camera);
     }
 
     function updateDayNightCycle() {
-        // Cycle 0 -> 1 over dayDuration
         const rawTime = (time % dayDuration) / dayDuration;
+        let skyColor, lightIntensity;
         
-        // Background Color
-        let skyColor, fogColor, lightIntensity;
-        
+        // Base Day/Night Colors
+        const morning = new THREE.Color(0xffaa00);
+        const noon = new THREE.Color(0x87CEEB);
+        const evening = new THREE.Color(0xfd5e53);
+        const night = new THREE.Color(0x0f172a);
+
         if (rawTime < 0.1) { // Sunrise
-            skyColor = new THREE.Color(0xffaa00).lerp(new THREE.Color(0x87CEEB), rawTime * 10);
-            lightIntensity = rawTime * 10;
+            skyColor = night.clone().lerp(morning, rawTime * 10);
+            lightIntensity = rawTime * 8;
+        } else if (rawTime < 0.2) { // Morning to Noon
+            skyColor = morning.clone().lerp(noon, (rawTime - 0.1) * 10);
+            lightIntensity = 0.8 + (rawTime - 0.1) * 2;
         } else if (rawTime < 0.6) { // Day
-            skyColor = new THREE.Color(0x87CEEB);
+            skyColor = noon;
             lightIntensity = 1;
         } else if (rawTime < 0.7) { // Sunset
-            skyColor = new THREE.Color(0x87CEEB).lerp(new THREE.Color(0x0f172a), (rawTime - 0.6) * 10);
-            lightIntensity = 1 - (rawTime - 0.6) * 10;
+            skyColor = noon.clone().lerp(evening, (rawTime - 0.6) * 10);
+            lightIntensity = 1 - (rawTime - 0.6) * 5;
+        } else if (rawTime < 0.8) { // Dusk
+            skyColor = evening.clone().lerp(night, (rawTime - 0.7) * 10);
+            lightIntensity = 0.5 - (rawTime - 0.7) * 4;
         } else { // Night
-            skyColor = new THREE.Color(0x0f172a);
+            skyColor = night;
             lightIntensity = 0.1;
         }
 
-        // Apply Weather Tint
-        if (currentWeather >= 2) { // Rain/Storm
-            skyColor.lerp(new THREE.Color(0x333333), 0.8);
-            lightIntensity *= 0.5;
-        }
+        // Apply Weather Tint (Progressive)
+        const stormColor = new THREE.Color(0x333333);
+        // Blend current sky with storm color based on weather blend factor (0 to 1)
+        // If weather is Rain/Storm (indices 2,3), target high blend. Else low.
+        // We'll calculate a 'storminess' factor
+        let storminess = 0;
+        const wType = WEATHER_TYPES[currentWeatherIndex];
+        const nextWType = WEATHER_TYPES[nextWeatherIndex];
+        
+        const getStorminess = (type) => (type === 'Rain' || type === 'Storm') ? 0.8 : (type === 'Snow' ? 0.4 : 0);
+        
+        const currentS = getStorminess(wType);
+        const nextS = getStorminess(nextWType);
+        const finalS = THREE.MathUtils.lerp(currentS, nextS, weatherBlend);
+
+        skyColor.lerp(stormColor, finalS);
+        lightIntensity *= (1 - finalS * 0.5);
 
         scene.background = skyColor;
         scene.fog.color = skyColor;
+        // Fog density changes with weather
+        scene.fog.density = 0.01 + (finalS * 0.02); 
+
         const sun = scene.getObjectByName("dirLight");
         sun.intensity = lightIntensity;
         sun.position.x = Math.sin(rawTime * Math.PI * 2) * 200;
         sun.position.y = Math.cos(rawTime * Math.PI * 2) * 200;
 
-        // Window Lights
-        buildingsGroup.children.forEach(b => {
-            if (b.userData.isWindow) {
-                b.material.opacity = (rawTime > 0.65 || rawTime < 0.05) ? 0.9 : 0;
-            }
+        // Window Lights logic
+        buildingsGroup.children.forEach(group => {
+            group.children.forEach(mesh => {
+                if (mesh.userData.isWindow) {
+                    mesh.material.opacity = (rawTime > 0.75 || rawTime < 0.05) ? 0.9 : 0;
+                }
+            });
         });
     }
 
     function updateWeather(delta) {
-        if (weatherTimer > 30) { // Change weather every 30s
-            currentWeather = (currentWeather + 1) % WEATHER_TYPES.length;
+        // Timer for cycle
+        weatherTimer += delta;
+        if (weatherTimer > WEATHER_CHANGE_INTERVAL) {
             weatherTimer = 0;
-            const wName = WEATHER_TYPES[currentWeather];
-            const wDisplay = document.getElementById('weather-display');
-            wDisplay.innerText = wName;
+            currentWeatherIndex = nextWeatherIndex;
+            // Pick next weather (not just +1, make it semi-random but logical)
+            // e.g., don't go Clear -> Storm instantly
+            const r = Math.random();
+            if (r < 0.3) nextWeatherIndex = 0; // Clear
+            else if (r < 0.5) nextWeatherIndex = 1; // Breezy
+            else if (r < 0.7) nextWeatherIndex = 2; // Rain
+            else if (r < 0.85) nextWeatherIndex = 3; // Storm
+            else nextWeatherIndex = 4; // Snow
             
-            // Text Color
-            if(wName==='Clear') wDisplay.className = 'hud-text mt-2 text-sm text-yellow-400';
-            else if(wName==='Rain') wDisplay.className = 'hud-text mt-2 text-sm text-blue-400';
-            else if(wName==='Snow') wDisplay.className = 'hud-text mt-2 text-sm text-white';
-            else wDisplay.className = 'hud-text mt-2 text-sm text-gray-400';
+            // UI Update
+            const wDisplay = document.getElementById('weather-display');
+            const wName = WEATHER_TYPES[currentWeatherIndex];
+            wDisplay.innerText = wName + " > " + WEATHER_TYPES[nextWeatherIndex];
         }
 
+        // Calculate Blend Factor (0 to 1 over the interval)
+        weatherBlend = weatherTimer / WEATHER_CHANGE_INTERVAL;
+        
+        // Particle System Logic
         const rainSys = particleSystems[0].mesh;
         const positions = rainSys.geometry.attributes.position.array;
+        
+        const getOpacity = (idx) => (idx >= 2) ? 0.6 : 0; // Rain/Storm/Snow visible
+        const getColor = (idx) => (idx === 4) ? 0xffffff : 0xaaaaaa; // Snow vs Rain
+        const getSpeed = (idx) => (idx === 4) ? 0.5 : 2.5;
 
-        if (currentWeather === 0 || currentWeather === 1) { // Clear/Windy
-            rainSys.material.opacity = 0;
-        } else {
-            rainSys.material.opacity = 0.6;
-            rainSys.material.color.setHex(currentWeather === 4 ? 0xffffff : 0xaaaaaa); // Snow white, rain gray
-            
-            // Update particles
-            const fallSpeed = currentWeather === 4 ? 0.5 : 2.5; // Snow slow
-            const windX = currentWeather === 3 ? 1 : 0; // Storm wind
+        const curOp = getOpacity(currentWeatherIndex);
+        const nextOp = getOpacity(nextWeatherIndex);
+        const finalOp = THREE.MathUtils.lerp(curOp, nextOp, weatherBlend);
+        
+        rainSys.material.opacity = finalOp;
+        
+        // Color transition (hard swap usually fine for color, or blend)
+        const targetColor = (nextWeatherIndex === 4 || currentWeatherIndex === 4) ? 0xffffff : 0xaaaaaa;
+        rainSys.material.color.setHex(targetColor);
 
-            for(let i=0; i<positions.length; i+=3) {
-                positions[i] += windX; 
-                positions[i+1] -= fallSpeed;
-                
-                // Reset
-                if (positions[i+1] < 0) {
-                    positions[i+1] = 100;
-                    positions[i] = (Math.random()-0.5)*200;
-                    positions[i+2] = (Math.random()-0.5)*200;
-                }
+        // Physics
+        const curSpeed = getSpeed(currentWeatherIndex);
+        const nextSpeed = getSpeed(nextWeatherIndex);
+        const fallSpeed = THREE.MathUtils.lerp(curSpeed, nextSpeed, weatherBlend);
+        
+        // Wind
+        let windX = (currentWeatherIndex === 3 || nextWeatherIndex === 3) ? 1 : 0; // Storm wind
+        if (currentWeatherIndex === 1 || nextWeatherIndex === 1) windX = 0.3; // Breezy
+
+        for(let i=0; i<positions.length; i+=3) {
+            positions[i] += windX; 
+            positions[i+1] -= fallSpeed;
+            if (positions[i+1] < 0) {
+                positions[i+1] = 100;
+                positions[i] = (Math.random()-0.5)*200;
+                positions[i+2] = (Math.random()-0.5)*200;
             }
-            rainSys.geometry.attributes.position.needsUpdate = true;
-            rainSys.position.x = car.position.x;
-            rainSys.position.z = car.position.z;
         }
+        rainSys.geometry.attributes.position.needsUpdate = true;
+        rainSys.position.x = car.position.x;
+        rainSys.position.z = car.position.z;
     }
 
     function updateCarPhysics(delta) {
-        // 1. Input Acceleration
         if (keys.ArrowUp || keys.w) speed = Math.min(speed + 0.01, maxSpeed);
         else if (keys.ArrowDown || keys.s) speed = Math.max(speed - 0.01, -maxSpeed/2);
-        else speed *= 0.98; // Friction
+        else speed *= 0.98; 
 
-        if (keys[" "]) speed *= 0.92; // Handbrake
+        if (keys[" "]) speed *= 0.92;
 
-        // 2. Turning
         if (Math.abs(speed) > 0.01) {
             const dir = Math.sign(speed);
             if (keys.ArrowLeft || keys.a) car.rotation.y += turnSpeed * dir;
             if (keys.ArrowRight || keys.d) car.rotation.y -= turnSpeed * dir;
         }
 
-        // 3. Move X/Z
-        const vx = Math.sin(car.rotation.y) * speed * 60 * delta; // Scale by delta
+        const vx = Math.sin(car.rotation.y) * speed * 60 * delta;
         const vz = Math.cos(car.rotation.y) * speed * 60 * delta;
         
         const nextX = car.position.x + vx;
         const nextZ = car.position.z + vz;
 
-        // 4. Collision (Solid Buildings)
+        // Collision with Building GROUPS
         let crashed = false;
-        for (let b of buildingsGroup.children) {
-            if (b.userData.isWindow) continue;
-            const dx = nextX - b.position.x;
-            const dz = nextZ - b.position.z;
-            const minDist = Math.max(b.scale.x, b.scale.z)/2 + 2;
-            if (Math.abs(dx) < minDist && Math.abs(dz) < minDist) {
-                crashed = true;
-                break;
+        for (let group of buildingsGroup.children) {
+            // Rough check against group position
+            const dx = nextX - group.position.x;
+            const dz = nextZ - group.position.z;
+            if (Math.abs(dx) < 8 && Math.abs(dz) < 8) {
+                 crashed = true;
+                 break;
             }
+        }
+        
+        // Collision with Trees
+        for (let tree of treesGroup.children) {
+             const dx = nextX - tree.position.x;
+             const dz = nextZ - tree.position.z;
+             if (Math.abs(dx) < 1.5 && Math.abs(dz) < 1.5) {
+                 crashed = true;
+                 break;
+             }
         }
 
         if (crashed) {
-            speed = -speed * 0.5; // Bounce
-            takeDamage(10);
+            speed = -speed * 0.5;
+            takeDamage(5);
             showSafetyMessage();
         } else {
             car.position.x = nextX;
             car.position.z = nextZ;
         }
 
-        // 5. Vertical Physics (Gravity & Jumping)
         const groundH = getTerrainHeight(car.position.x, car.position.z);
         
         if (isHovering) {
-            // Heli Logic
             car.position.y += ( (groundH + 8 + Math.sin(time*2)) - car.position.y ) * 0.1;
-            // Rotor spin
-            const rotor = car.getObjectByName("rotor");
-            if(rotor) rotor.rotation.y += 0.5;
+            const r1 = car.getObjectByName("rotor1");
+            const r2 = car.getObjectByName("rotor2");
+            const tr = car.getObjectByName("tailRotor");
+            if(r1) r1.rotation.y += 0.5;
+            if(r2) r2.rotation.y += 0.5;
+            if(tr) tr.rotation.x += 0.5;
         } else {
-            // Car Logic
             yVelocity += gravity;
             car.position.y += yVelocity;
 
@@ -728,40 +911,31 @@
                 car.position.y = groundH + 1;
                 yVelocity = 0;
                 
-                // Ramp Logic: If speed is high and ground slope is up, add Y velocity
-                // Simple approximation: Check height ahead
                 const lookAhead = getTerrainHeight(car.position.x + vx*5, car.position.z + vz*5);
                 if (lookAhead > groundH + 1 && speed > maxSpeed * 0.8) {
-                    // We are hitting a ramp fast
                     yVelocity = jumpForce;
                 }
             }
             
-            // Tilt logic
             const hF = getTerrainHeight(car.position.x + Math.sin(car.rotation.y), car.position.z + Math.cos(car.rotation.y));
             const hR = getTerrainHeight(car.position.x + Math.sin(car.rotation.y-1.57), car.position.z + Math.cos(car.rotation.y-1.57));
             
-            // Smooth tilt
             const targetPitch = (hF - groundH) * 0.5;
             const targetRoll = (groundH - hR) * 0.5;
             
-            // Only tilt if near ground
             if (car.position.y - groundH < 2) {
                 car.rotation.x += (targetPitch - car.rotation.x) * 0.1;
                 car.rotation.z += (targetRoll - car.rotation.z) * 0.1;
             } else {
-                // Mid-air straighten
                 car.rotation.x *= 0.95;
                 car.rotation.z *= 0.95;
             }
         }
 
-        // 6. Camera Follow
         const offset = new THREE.Vector3(0, 8, -15).applyMatrix4(car.matrixWorld);
         camera.position.lerp(offset, 0.1);
         camera.lookAt(car.position.x, car.position.y + 2, car.position.z);
 
-        // 7. Damage Visuals
         updateDamageEffects();
     }
 
@@ -781,12 +955,11 @@
     }
 
     function updateDamageEffects() {
-        // Smoke at < 50%
         if (health < 50) {
             smokeEmitter.material.opacity = 0.5;
             const positions = smokeEmitter.geometry.attributes.position.array;
             for(let i=0; i<positions.length; i+=3) {
-                positions[i+1] += 0.1; // Rise
+                positions[i+1] += 0.1; 
                 if(positions[i+1] > 5) {
                     positions[i] = (Math.random()-0.5);
                     positions[i+1] = 0;
@@ -798,7 +971,6 @@
             smokeEmitter.material.opacity = 0;
         }
 
-        // Fire at < 20%
         if (health < 20) {
             fireEmitter.material.opacity = 0.8;
             const positions = fireEmitter.geometry.attributes.position.array;
@@ -818,30 +990,24 @@
     }
 
     function updateEnvironment(delta) {
-        // Rotate Atoms
         itemsGroup.children.forEach(item => item.rotation.y += 0.02);
-        
-        // Pulse Obstacles
         obstaclesGroup.children.forEach(obs => {
             obs.scale.setScalar(1 + Math.sin(time * 5) * 0.1);
         });
 
-        // Check Collisions (Items/Spikes)
-        const carBox = new THREE.Box3().setFromObject(car);
+        const carPos = car.position;
         
-        // Collect
         for (let i = itemsGroup.children.length - 1; i >= 0; i--) {
             const item = itemsGroup.children[i];
-            if (car.position.distanceTo(item.position) < 4) {
+            if (carPos.distanceTo(item.position) < 4) {
                 itemsGroup.remove(item);
                 triggerQuiz();
             }
         }
         
-        // Spikes
         for (let obs of obstaclesGroup.children) {
-            if (car.position.distanceTo(obs.position) < 3) {
-                takeDamage(0.5); // Constant damage if sitting on spike
+            if (carPos.distanceTo(obs.position) < 3) {
+                takeDamage(0.5); 
             }
         }
     }
@@ -863,7 +1029,6 @@
         qFeedback.classList.add('hidden');
         btnContinue.classList.add('hidden');
 
-        // Shuffle
         [...currentQ.options].sort(() => Math.random() - 0.5).forEach(opt => {
             const btn = document.createElement('button');
             btn.className = 'w-full p-4 bg-gray-700 hover:bg-blue-600 text-left rounded-lg transition-all border border-gray-600';
@@ -875,7 +1040,7 @@
                     qFeedback.innerText = "Correct! Repairing vehicle...";
                     qFeedback.className = "mt-4 font-bold text-lg text-green-400";
                     score += 100;
-                    health = Math.min(100, health + 20); // Repair
+                    health = Math.min(100, health + 20); 
                 } else {
                     btn.classList.remove('bg-gray-700', 'hover:bg-blue-600');
                     btn.classList.add('bg-red-600');
@@ -894,7 +1059,6 @@
         document.getElementById('quiz-modal').style.display = 'none';
         itemsCollected++;
         updateUI();
-        // Respawn Item
         const atomGeo = new THREE.SphereGeometry(1.5, 16, 16);
         const atomMat = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x0044ff });
         const item = new THREE.Mesh(atomGeo, atomMat);
@@ -903,7 +1067,7 @@
         itemsGroup.add(item);
         
         gameActive = true;
-        clock.getDelta(); // clear delta
+        clock.getDelta(); 
         animate();
     }
 
