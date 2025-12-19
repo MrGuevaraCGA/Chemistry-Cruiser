@@ -78,6 +78,14 @@
         .answer-btn:hover { background: rgba(59, 130, 246, 0.2); border-color: #3b82f6; padding-left: 20px; }
         .answer-btn:disabled { opacity: 0.7; cursor: not-allowed; }
 
+        /* Level Up Animation */
+        @keyframes levelPop {
+            0% { transform: scale(0); opacity: 0; }
+            50% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .level-anim { animation: levelPop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+
         /* Mobile Controls */
         #mobile-controls {
             position: absolute; bottom: 20px; width: 100%; height: 160px; pointer-events: none;
@@ -108,6 +116,12 @@
 <div class="hud">
     <div class="hud-panel">
         <div class="hud-text">
+            <span class="hud-label">Level</span>
+            <span class="hud-value" id="level-display">1</span>
+        </div>
+    </div>
+    <div class="hud-panel">
+        <div class="hud-text">
             <span class="hud-label">Score</span>
             <span class="hud-value" id="score-display">0</span>
         </div>
@@ -115,9 +129,14 @@
     <div class="hud-panel">
         <div class="hud-text">
             <span class="hud-label">Matter</span>
-            <span class="hud-value" id="items-display">0/10</span>
+            <span class="hud-value" id="items-display">0</span>
         </div>
     </div>
+</div>
+
+<!-- Level Up Overlay -->
+<div id="level-up-overlay" class="hidden absolute top-0 left-0 w-full h-full flex justify-center items-center pointer-events-none z-40">
+    <h1 class="text-6xl md:text-8xl font-black text-yellow-400 drop-shadow-[0_0_20px_rgba(255,215,0,0.8)] level-anim" style="-webkit-text-stroke: 2px #b45309;">LEVEL UP!</h1>
 </div>
 
 <!-- Start Screen -->
@@ -191,6 +210,7 @@
     let gameActive = false;
     let score = 0;
     let itemsCollected = 0;
+    let level = 1;
     let clock = new THREE.Clock();
     let keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, w: false, s: false, a: false, d: false };
     
@@ -198,17 +218,22 @@
     let speed = 0;
     let maxSpeed = 0.8;
     let turnSpeed = 0.04;
-    let velocity = new THREE.Vector3();
     
     // Environment
     const CITY_SIZE = 1000;
     const BUILDING_COUNT = 150;
-    let fogColor = { r: 0.1, g: 0.1, b: 0.2 }; // Start night-ish
+    const ITEMS_FOR_LEVEL_UP = 3;
     let time = 0;
 
     // --- Three.js Initialization ---
     function initGame() {
         document.getElementById('start-screen').style.display = 'none';
+        
+        // Reset Logic
+        level = 1;
+        score = 0;
+        itemsCollected = 0;
+        updateScore();
         
         // 1. Scene Setup
         scene = new THREE.Scene();
@@ -223,7 +248,10 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        document.getElementById('game-container').appendChild(renderer.domElement);
+        
+        const container = document.getElementById('game-container');
+        container.innerHTML = ''; // Clear prev if any
+        container.appendChild(renderer.domElement);
 
         // 4. Lighting
         const ambientLight = new THREE.AmbientLight(0x404040, 2); // Soft white light
@@ -280,7 +308,6 @@
 
         // Buildings
         const boxGeo = new THREE.BoxGeometry(1, 1, 1);
-        const winMat = new THREE.MeshBasicMaterial({ color: 0xffff00 }); // Lit windows
         
         for (let i = 0; i < BUILDING_COUNT; i++) {
             // Random Size
@@ -381,6 +408,9 @@
     }
 
     function createCollectibles() {
+        if(itemsGroup) scene.remove(itemsGroup);
+        if(obstaclesGroup) scene.remove(obstaclesGroup);
+
         itemsGroup = new THREE.Group();
         obstaclesGroup = new THREE.Group();
 
@@ -390,7 +420,7 @@
         const spikeGeo = new THREE.ConeGeometry(0.6, 2, 8);
         const spikeMat = new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0x550000 });
 
-        // Spawn items randomly
+        // Base Spawn
         for(let i=0; i<30; i++) { spawnItem(atomGeo, atomMat); }
         for(let i=0; i<20; i++) { spawnObstacle(spikeGeo, spikeMat); }
 
@@ -414,6 +444,11 @@
         const obs = new THREE.Mesh(geo, mat);
         setRandomPosition(obs);
         obs.position.y = 1;
+        // Assign random patrol logic offset
+        obs.userData = { 
+            offset: Math.random() * 100,
+            speed: (Math.random() * 0.05) + 0.02 
+        };
         obstaclesGroup.add(obs);
     }
 
@@ -474,9 +509,10 @@
         camera.lookAt(car.position);
 
         // 3. Environment Animation (Weather/DayCycle)
-        const hue = (Math.sin(time * 0.1) + 1) * 0.1 + 0.55; // Blue to purple shift
-        scene.fog.color.setHSL(hue, 0.3, 0.1);
-        scene.background.setHSL(hue, 0.3, 0.05);
+        // Shift colors slightly faster based on level
+        const hue = (Math.sin(time * 0.1) + 1) * 0.1 + 0.55 + (level * 0.05); 
+        scene.fog.color.setHSL(hue % 1, 0.3, 0.1);
+        scene.background.setHSL(hue % 1, 0.3, 0.05);
 
         // Rain follow car
         if(rainSystem) {
@@ -498,14 +534,25 @@
             item.children[0].rotation.x += 0.05; // Spin ring
         });
         
-        obstaclesGroup.children.forEach(obs => {
+        // 5. Obstacle Animation (Dynamic Movement)
+        obstaclesGroup.children.forEach((obs, idx) => {
             obs.rotation.y -= 0.05;
             // Pulsing scale
-            const s = 1 + Math.sin(time * 5) * 0.1;
+            const s = 1 + Math.sin(time * 5 + idx) * 0.1;
             obs.scale.set(s, s, s);
+
+            // Level 2+ Mechanics: Movement
+            if (level > 1) {
+                const moveSpeed = obs.userData.speed * (level * 0.5); // Faster per level
+                const offset = obs.userData.offset;
+                
+                // Simple circular patrol pattern
+                obs.position.x += Math.sin(time * moveSpeed + offset) * 0.1;
+                obs.position.z += Math.cos(time * moveSpeed + offset) * 0.1;
+            }
         });
 
-        // 5. Collision Detection
+        // 6. Collision Detection
         checkCollisions();
 
         renderer.render(scene, camera);
@@ -604,21 +651,49 @@
     function closeQuiz() {
         document.getElementById('quiz-modal').style.display = 'none';
         itemsCollected++;
+        
+        // Check Level Up
+        if (itemsCollected % ITEMS_FOR_LEVEL_UP === 0) {
+            performLevelUp();
+        }
+
         updateScore();
         
-        // Spawn replacement item somewhere else
+        // Spawn replacement item
         const atomGeo = new THREE.SphereGeometry(0.6, 16, 16);
         const atomMat = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x0088aa, emissiveIntensity: 0.5 });
         spawnItem(atomGeo, atomMat);
 
         gameActive = true; // Resume
-        clock.getDelta(); // Reset clock to prevent jumping
+        clock.getDelta(); // Reset clock
         animate();
     }
 
+    function performLevelUp() {
+        level++;
+        
+        // Show Overlay
+        const overlay = document.getElementById('level-up-overlay');
+        overlay.classList.remove('hidden');
+        
+        // Hide overlay after animation
+        setTimeout(() => {
+            overlay.classList.add('hidden');
+        }, 2500);
+
+        // Increase Difficulty: Add 5 more obstacles
+        const spikeGeo = new THREE.ConeGeometry(0.6, 2, 8);
+        const spikeMat = new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0x550000 });
+        
+        for(let i=0; i<5; i++) {
+            spawnObstacle(spikeGeo, spikeMat);
+        }
+    }
+
     function updateScore() {
+        document.getElementById('level-display').innerText = level;
         document.getElementById('score-display').innerText = score;
-        document.getElementById('items-display').innerText = `${itemsCollected}/10`;
+        document.getElementById('items-display').innerText = itemsCollected;
     }
 
     // Mobile Input Setup
